@@ -46,19 +46,19 @@ SCORE_BCD_HIGH                   equ     0E033h    ; Top byte of SCORE_BCD (+2);
 BONUS_BCD                        equ     0E034h    ; 4-byte BCD bonus counter from STAGE_CLEAR_BONUS via BCD_ADD_TO_BONUS overlap
 LIVES                            equ     0E035h    ; Lives remaining; decremented on death, gates jump back to title
 VBLANK_PARITY                    equ     0E036h    ; Inc'd at top of VBLANK_GAME_FRAME; low bit gates alternating refresh path
-STAGE_TIMER_INNER                equ     0E037h    ; Inner tick counter for TICK_STAGE_TIMER; resets to E0BA on rollover
+STAGE_TIMER_INNER                equ     0E037h    ; Inner tick counter; resets to STAGE_TIMER_RELOAD on rollover
 STAGE_TIMER_OUTER                equ     0E038h    ; Outer countdown decremented by TICK_STAGE_TIMER and TICK_FUEL_REFRESH
 FUEL_LEVEL                       equ     0E039h    ; Depletes by 3 per smoke; UPDATE_FUEL_GAUGE renders it as a tile bar
 STAGE_TIMER_RELOAD               equ     0E03Ah    ; Reload value for STAGE_TIMER_INNER when it hits zero
 PLAYER_DEAD_FLAG                 equ     0E03Bh    ; Non-zero ⇒ trigger death sequence (jp DEATH_SEQUENCE from frame check)
-SAVED_TIMER_FOR_DEATH            equ     0E03Ch    ; Backup of (E0B8, E0B9) preserved across DEATH_SEQUENCE
+SAVED_TIMER_FOR_DEATH            equ     0E03Ch    ; Backup of (STAGE_TIMER_OUTER, FUEL_LEVEL) preserved across DEATH_SEQUENCE
 EXTRA_LIFE_AWARDED               equ     0E03Eh    ; Flag: set by CHECK_SCORE_MILESTONE to avoid awarding the same extra life twice
 STAGE_DIFFICULTY_INDEX           equ     0E03Fh    ; Per-stage sub-index; offsets into STAGE_DIFFICULTY_TABLE in LOAD_STAGE_PARAMS
 STAGE_ENEMY_SEED_LEN             equ     0E040h    ; INIT_ENEMY_CARS seed-copy length in bytes (cars*16)
 ENEMY_STEP_SPEED                 equ     0E041h    ; Per-stage enemy step velocity (8.8); added to position accumulator each tick
-ENEMY_STEP_SPEED_HI              equ     0E042h    ; High byte of ENEMY_STEP_SPEED 16-bit pair; only ever read as part of (E0C1)
+ENEMY_STEP_SPEED_HI              equ     0E042h    ; High byte of the ENEMY_STEP_SPEED 16-bit pair; read only as part of it
 SCROLL_LIMIT_LO                  equ     0E043h    ; Low byte of forward-scroll cap; PLAYFIELD_SCROLL_OFFSET stops advancing at this
-SCROLL_LIMIT_HI                  equ     0E044h    ; High byte of forward-scroll cap (paired with SCROLL_LIMIT_LO at E0C3)
+SCROLL_LIMIT_HI                  equ     0E044h    ; High byte of forward-scroll cap (paired with SCROLL_LIMIT_LO)
 PLAYER_MOVE_GATE                 equ     0E045h    ; Set during death/init transitions; gates player position updates and movement
 VRAM_BANK_FLAG                   equ     0E046h    ; Drives VDP R4 toggle between pattern bank 0800h and 1800h (double-buffer)
 PAUSE_KEY_HISTORY                equ     0E047h    ; Shift register; CHECK_PAUSE_KEY rotates key bits into here to debounce chord
@@ -258,7 +258,7 @@ TEMP_SPACE                       equ     0E000h    ; Boot scratch at E000 (work-
 ;
 ; Memory layout (RAM):
 ;   E000-E049 game state flags/counters (work area),
-;   E100-E4FF four object tables (E100/E200/E300/E400),
+;   E100-E4FF object tables: FLAG_TABLE/ROCK_TABLE/ENEMY_CAR_TABLE/SMOKE_TRAIL_TABLE,
 ;   E500-E5FF PSG mirror + sound subsystem state,
 ;   EA00-EAFF RADAR_GRID + OBSTACLE_GRID,
 ;   EB00-EBxx SAT_MIRROR,
@@ -1092,12 +1092,12 @@ DIGIT_TEMPLATE_F0:
         dh      "F0F1F2F3F4F5F6F7"                             ;#462F: F0 F1 F2 F3 F4 F5 F6 F7
 
 DEATH_SEQUENCE:
-        ; Player-death animation entry; pp E0B8 to E0BC, etc., before respawn
+        ; Player-death entry; saves STAGE_TIMER_OUTER..SAVED_TIMER_FOR_DEATH on respawn
         ; DEATH_SEQUENCE handles a player-rock or player-enemy collision. Saves
-        ; STAGE_TIMER pair (E0B8, E0B9 → E0BC) so it can resume after the death
-        ; animation. Plays death SFX, animates player car explosion, then either: LIVES
-        ; > 0 → respawn at start position; LIVES = 0 → set GAME_OVER_FLAG to trigger
-        ; GAME_OVER_SEQUENCE next frame.
+        ; STAGE_TIMER pair (STAGE_TIMER_OUTER, FUEL_LEVEL → SAVED_TIMER_FOR_DEATH) so it
+        ; can resume after the death animation. Plays death SFX, animates player car
+        ; explosion, then either: LIVES > 0 → respawn at start position; LIVES = 0 → set
+        ; GAME_OVER_FLAG to trigger GAME_OVER_SEQUENCE next frame.
         ld      hl,(STAGE_TIMER_OUTER)                         ;#4637: 2A 38 E0
         ld      (SAVED_TIMER_FOR_DEATH),hl                     ;#463A: 22 3C E0
         ld      a,(STAGE_PALETTE_INDEX)                        ;#463D: 3A 30 E0
@@ -1946,9 +1946,9 @@ PLAYFIELD_CELL_TILES:
 LOOKUP_PLAYFIELD_CELL:
         ; Given (H, L) map coord, index MAZE_BITMAP_N per STAGE_PALETTE_INDEX
         ; LOOKUP_PLAYFIELD_CELL takes (H, L) as a map coordinate and returns the
-        ; playfield cell value in BC. Indexes MAZE_BITMAP_N at 7C00..7F00 at offset
-        ; based on STAGE_PALETTE_INDEX (top bits) + coord. Returns cell type so callers
-        ; can distinguish rock vs flag vs road.
+        ; playfield cell value in BC. Indexes MAZE_BITMAP_N at
+        ; MAZE_BITMAP_0..MAZE_BITMAP_3 at offset based on STAGE_PALETTE_INDEX (top bits)
+        ; + coord. Returns cell type so callers can distinguish rock vs flag vs road.
         push    bc                                             ;#4B7C: C5
         ld      bc,MAZE_BITMAP_0                               ;#4B7D: 01 00 7C
         ld      a,l                                            ;#4B80: 7D
@@ -2060,7 +2060,8 @@ INIT_LOOKUP_TAIL_LOOP:
 INIT_STAGE_TRACK_DATA:
         ; Initialize TRACK_DATA_RING region (10 x 0x5A blocks) with stage path/track state
         ; INIT_STAGE_TRACK_DATA initializes TRACK_DATA_RING. Sets up two 16-bit pointers
-        ; (E088 = E08A = F400h, E08F = 320Fh, E092 = 0). Then loops 10 times, calling
+        ; (WORLD_X_POS = WORLD_Y_POS = F400h, PLAYER_WORLD_POSITION_X = 320Fh,
+        ; PLAYFIELD_SCROLL_OFFSET = 0). Then loops 10 times, calling
         ; SCAN_PLAYFIELD_H_STRIP with HL=0B2Eh and DE walking by 0x5A per iter —
         ; populates the 10 enemy-car path/track records.
         ld      hl,PLAYFIELD_LOOKUP_TABLE                      ;#4BFD: 21 00 F4
@@ -2091,7 +2092,7 @@ INIT_TRACK_DATA_LOOP:
         ret                                                    ;#4C2E: C9
 
 INIT_ENEMY_CARS:
-        ; Clear 0x6F bytes at E300 and reset its iterator timer (E09D = 70h)
+        ; Clear ENEMY_CAR_TABLE (0x6F bytes) and reset ENEMY_CAR_ITER_TIMER to 70h
         ; INIT_ENEMY_CARS clears 6Fh bytes of ENEMY_CAR_TABLE to 0 and resets
         ; ENEMY_CAR_ITER_TIMER to 70h. Then loads stage-specific seed data from
         ; INITIAL_ENEMY_CARS_DATA using STAGE_ENEMY_SEED_LEN bytes worth.
@@ -2111,7 +2112,7 @@ INIT_ENEMY_CARS:
         ret                                                    ;#4C4F: C9
 
 INITIAL_ENEMY_CARS_DATA:
-        ; Stage-specific initial state for ENEMY_CAR_TABLE (E0C0 bytes copied)
+        ; Stage-specific initial ENEMY_CAR_TABLE state (STAGE_ENEMY_SEED_LEN bytes)
         ; INITIAL_ENEMY_CARS_DATA holds the stage-specific seed for ENEMY_CAR_TABLE.
         ; STAGE_ENEMY_SEED_LEN bytes (=enemies*16) get copied in by INIT_ENEMY_CARS.
         ; Each 16-byte enemy record encodes type, initial position, direction, and AI
@@ -3327,9 +3328,10 @@ SCROLL_ROCKS_STORE:
 
 INIT_ROCKS:
         ; Initialize ROCK_TABLE at stage start
-        ; INIT_ROCKS clears ROCK_TABLE and seeds it from MAZE_BITMAP_N at 7C00..7F00
-        ; using random positions. ROCK_SPAWN_COUNT (ROCK_SPAWN_COUNT) controls the
-        ; count. Called once per stage from INITIAL_STATE_HANDLER's tail.
+        ; INIT_ROCKS clears ROCK_TABLE and seeds it from MAZE_BITMAP_N at
+        ; MAZE_BITMAP_0..MAZE_BITMAP_3 using random positions. ROCK_SPAWN_COUNT
+        ; (ROCK_SPAWN_COUNT) controls the count. Called once per stage from
+        ; INITIAL_STATE_HANDLER's tail.
         ld      hl,ROCK_TABLE                                  ;#5663: 21 00 E2
         ld      a,(ROCK_SPAWN_COUNT)                           ;#5666: 3A 1C E0
         and     a                                              ;#5669: A7
@@ -3508,10 +3510,10 @@ UPDATE_ROCKS_COLLISION_NEXT:
 
 ADD_DE_TO_ENEMY_X:
         ; Add DE (sign-extended) to ENEMY_OFFSET_X (9..0Ah) of all 7 enemies
-        ; ADD_DE_TO_ENEMY_X iterates 7 ENEMY_CAR_TABLE entries (skipping E300+0=type).
-        ; For each entry, adds DE (sign-extended via rla) to ENEMY_OFFSET_X (screen X,
-        ; 9..0Ah). Applies the world-scroll delta to every enemy's screen X when the
-        ; player moves.
+        ; ADD_DE_TO_ENEMY_X iterates 7 ENEMY_CAR_TABLE entries (skipping
+        ; ENEMY_CAR_TABLE+0=type). For each entry, adds DE (sign-extended via rla) to
+        ; ENEMY_OFFSET_X (screen X, 9..0Ah). Applies the world-scroll delta to every
+        ; enemy's screen X when the player moves.
         exx                                                    ;#5733: D9
         ld      e,a                                            ;#5734: 5F
         ld      d,0                                            ;#5735: 16 00
@@ -4168,7 +4170,7 @@ ENEMY_COLLIDE_STORE_OTHER:
         jp      ENEMY_COLLIDE_LOOP                             ;#5B77: C3 09 5B
 
 CHECK_ENEMY_HITS_ROCK:
-        ; AABB-style check (|dx|<0Ch & |dy|<0Ch) between IX (E300) and IY (E200)
+        ; AABB check (|dx|,|dy| < 0Ch) between IX (ENEMY_CAR_TABLE) and IY (ROCK_TABLE)
         ; CHECK_ENEMY_HITS_ROCK does an AABB check between the current enemy car (IX =
         ; ENEMY_CAR_TABLE entry) and every ROCK_TABLE entry (IY). |dx| < 0Ch AND |dy| <
         ; 0Ch ⇒ hit; on hit, XOR bit 1 of (ix+0Fh) — a flag the enemy uses to reverse
@@ -4414,7 +4416,7 @@ SMOKE_APPLY_DY:
         jr      nc,SMOKE_DEACTIVATE                            ;#5CC8: 30 1A
         sub     18h                                            ;#5CCA: D6 18
         ld      hl,(SAT_MIRROR_CURSOR)                         ;#5CCC: 2A 14 E0
-        ; emit one E400 object sprite
+        ; emit one SMOKE_TRAIL_TABLE object sprite
         ld      (hl),a                                         ;#5CCF: 77
         inc     hl                                             ;#5CD0: 23
         ld      (hl),c                                         ;#5CD1: 71
@@ -4613,7 +4615,7 @@ TILE_PATTERN_NAMCOT_LOGO:
         dh      "F8FC0C0C0C0CFCF8FFFF181818181818"             ;#6180: F8 FC 0C 0C 0C 0C FC F8 FF FF 18 18 18 18 18 18
 
 TILE_PATTERN_CHAR_FONT:
-        ; Uppercase font tiles: A-Z © . − (32x 8x8); LDIR'd 3x to E100-E3FF
+        ; Uppercase font tiles: A-Z © . − (32x 8x8); LDIR'd 3x to FLAG_TABLE (E100-E3FF)
         dh      "00000000000000001C3663637F636300"             ;#6190: 00 00 00 00 00 00 00 00 1C 36 63 63 7F 63 63 00
         dh      "7E63637E63637E001E33606060331E00"             ;#61A0: 7E 63 63 7E 63 63 7E 00 1E 33 60 60 60 33 1E 00
         dh      "7C66636363667C003F30303E30303F00"             ;#61B0: 7C 66 63 63 63 66 7C 00 3F 30 30 3E 30 30 3F 00
@@ -5040,8 +5042,8 @@ UPDATE_LIVES_DISPLAY:
         ; UPDATE_LIVES_DISPLAY reads LIVES, indexes LIVES_ICON_TILES - 2*LIVES (so
         ; LIVES_ICON_TILES_TOP extends backward to prepend N car-top tiles), and LDIRVMs
         ; the two tile rows into the HUD name-table row (06B7h/06D7h) in both banks.
-        ; LIVES=0 -> blank; LIVES=1 -> 1 mini-car icon; etc. These are name-table
-        ; tiles, not sprites.
+        ; LIVES=0 -> blank; LIVES=1 -> 1 mini-car icon; etc. These are name-table tiles,
+        ; not sprites.
         ld      a,(LIVES)                                      ;#6865: 3A 35 E0
         ld      hl,LIVES_ICON_TILES                            ;#6868: 21 AC 68
         add     a,a                                            ;#686B: 87
@@ -6417,7 +6419,7 @@ NOTE_PERIOD_TABLE:
         dw      2Ch    ;  2542.3 Hz  O7 D#                     ;#7119: 2C 00
 
 TICK_STAGE_TIMER:
-        ; Two-stage countdown: dec E0B7, on zero reload from E0BA and dec E0B8
+        ; Dec STAGE_TIMER_INNER; at 0 reload STAGE_TIMER_RELOAD, dec STAGE_TIMER_OUTER
         ; TICK_STAGE_TIMER is the two-stage countdown: dec STAGE_TIMER_INNER
         ; (STAGE_TIMER_INNER). If non-zero, return. Else reload from STAGE_TIMER_RELOAD
         ; (STAGE_TIMER_RELOAD) and dec STAGE_TIMER_OUTER. Used as a sub-frame pacing
@@ -6428,7 +6430,7 @@ TICK_STAGE_TIMER:
         ld      a,(STAGE_TIMER_RELOAD)                         ;#7120: 3A 3A E0
         ld      (hl),a                                         ;#7123: 77
 TICK_FUEL_REFRESH:
-        ; Dec E0B8 (reload 0Ah); on rollover, refresh fuel gauge cells
+        ; Dec STAGE_TIMER_OUTER (reload 0Ah); on rollover, refresh fuel gauge cells
         ; TICK_FUEL_REFRESH dec STAGE_TIMER_OUTER (the outer timer) with auto-reload to
         ; 0Ah. On rollover, refreshes the fuel gauge cells in VRAM via BIOS_WRTVRM if
         ; FUEL_LEVEL is in the low range. Called from DRAIN_FUEL_* variants during
@@ -6612,7 +6614,7 @@ STAGE_PARAM_TABLE:
         STAGE_PARAMS rocks=12, enemies=7, reload=5, difficulty=15  ;#724A: 0C 70 05 B4
 
 STAGE_DIFFICULTY_TABLE:
-        ; 16 records x 12 bytes (3 tiers x 4 bytes); STAGE_DIFFICULTY_TABLE..730Dh
+        ; 16 records x 12 bytes (3 tiers x 4 bytes), ending just before PADDING
         ; STAGE_DIFFICULTY_TABLE has 16 stage records, each containing 3 difficulty
         ; tiers (4 bytes each = 12 bytes per record, 192 total). LOAD_STAGE_PARAMS uses
         ; STAGE_DIFFICULTY against thresholds 6 and 3 to pick the tier — enemies get
