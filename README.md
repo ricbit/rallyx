@@ -26,7 +26,8 @@ semantic information using macros, in order to explain most magic numbers.
 - ID string: "newRALLYX"
 - Namco mapper (first 8kb mapped to 4000h, last 8kb mapped to 8000h)
 - Display garbage during boot.
-- Stack at F000h
+- Stack at F000h.
+- Playfield stored at F400h.
 
 ### Second release
 
@@ -34,6 +35,7 @@ semantic information using macros, in order to explain most magic numbers.
 - Regular, linear addressing 4000-7FFF
 - Disable screen before writing VRAM during boot.
 - Stack at FFFFh (may not work in expanded slots).
+- Playfield stored at F400h.
 
 ### Third release
 
@@ -41,6 +43,7 @@ semantic information using macros, in order to explain most magic numbers.
 - Regular, linear addressing 4000-7FFF
 - Disable screen before writing VRAM during boot.
 - Stack at F380h.
+- Playfield stored at E600h.
 
 ## Credits
 

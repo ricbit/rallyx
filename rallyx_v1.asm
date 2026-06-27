@@ -267,9 +267,6 @@ TEMP_SPACE                       equ     0E000h    ; Boot scratch at E000 (work-
 ;   EC00-EF83 TRACK_DATA_RING,
 ;   F400-FBxx PLAYFIELD_LOOKUP_TABLE + OUT_OF_BOUNDS, stack top at FFFFh.
 ;
-; (First-release RAM map: SAT_MIRROR, work area, lookup table, radar grid,
-; track ring and stack all sit at different addresses than the second release.)
-;
 ; Frame model: VBLANK_HANDLER (4051h) is hooked into BIOS_H_TIMI
 ; and dispatches to a state handler via STATE_HANDLER_VECTOR.
 ; State handlers yield via WAIT_VBLANK / WAIT_VBLANK_FINISH_SPRITES
@@ -374,7 +371,7 @@ ROM_HEADER:
         dw      0                                              ;#400E: 00 00
 
 ROM_TITLE:
-        ; Cart title: length byte 09h + "newRALLYX" (hacked build)
+        ; Cart title: length byte 09h + "newRALLYX"
         db      9, "newRALLYX"                                 ;#4010: 09 6E 65 77 52 41 4C ...
 
 GAME_BOOT:
